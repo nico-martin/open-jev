@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Build output in examples
+examples/**/dist/

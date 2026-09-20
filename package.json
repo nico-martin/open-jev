@@ -1,0 +1,55 @@
+{
+  "name": "open-jev",
+  "version": "0.1.0",
+  "description": "Typed decisions in the browser: run the open-jev model (a Jev-shaped System One model) with Transformers.js.",
+  "author": "Nico Martin <mail@nico.dev>",
+  "license": "MIT",
+  "packageManager": "pnpm@11.1.1",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:lib": "node scripts/build.mjs --watch",
+    "dev:example": "pnpm --dir examples/simple dev",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "format": "prettier --write \"src/**/*.ts\" \"scripts/*.mjs\" \"examples/*/src/**/*.ts\" README.md",
+    "publish": "node scripts/publish.mjs"
+  },
+  "keywords": [
+    "jev",
+    "open-jev",
+    "typed-decisions",
+    "transformers.js",
+    "onnx",
+    "webgpu",
+    "classification",
+    "browser"
+  ],
+  "peerDependencies": {
+    "@huggingface/transformers": ">=4.3.0"
+  },
+  "devDependencies": {
+    "@huggingface/transformers": "^4.3.0",
+    "esbuild": "^0.25.3",
+    "prettier": "^3.8.1",
+    "typescript": "^5.8.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nico-martin/open-jev.git"
+  }
+}
