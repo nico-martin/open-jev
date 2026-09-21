@@ -1,10 +1,14 @@
 /**
- * Builds the single-sequence input the open-jev graph expects:
+ * Sequence builders for the two model families.
  *
+ * open-jev (DeBERTa):
  *   [CLS] [STATE] state [Q] instructions [OPT] option_1 [OPT] option_2 … [Q] … [SEP]
+ *   plus the span-slot tensor (`seg`) and per-pair slot ids (`pair_q`, `pair_opt`).
  *
- * plus the span-slot tensor (`seg`) and the per-pair slot ids (`pair_q`,
- * `pair_opt`). See the model card for the layout.
+ * kev (Qwen3):
+ *   <state> state <q> instructions <opt> option_1 </opt> <opt> option_2 </opt> … <decide> <q> …
+ *   only `input_ids` and `attention_mask`; the graph derives the block-causal
+ *   mask from the delimiters and returns one logit per token.
  */
 
 export type MarkerIds = {
@@ -22,10 +26,9 @@ export type TokenizedQuestion = {
 
 export type EncodedSequence = {
   inputIds: number[];
-  seg: number[];
-  pairQ: number[];
-  pairOpt: number[];
-  /** Pair indices per question, in question order. */
+  /** Extra int64 inputs besides `input_ids` and `attention_mask`. */
+  extraInputs: Record<string, number[]>;
+  /** Per question: indices into the flat `logits` output, one per option. */
   groups: number[][];
   /** Number of state tokens that made it into the sequence. */
   stateTokens: number;
@@ -94,9 +97,68 @@ export function encodeSequence(params: EncodeParams): EncodedSequence {
 
   return {
     inputIds,
-    seg,
-    pairQ,
-    pairOpt,
+    extraInputs: { seg, pair_q: pairQ, pair_opt: pairOpt },
+    groups,
+    stateTokens: stateTokens.length,
+    stateTruncated: stateTokens.length < state.length,
+  };
+}
+
+export type KevDelimiterIds = {
+  state: number;
+  question: number;
+  optionStart: number;
+  optionEnd: number;
+  decide: number;
+};
+
+export type KevEncodeParams = {
+  state: number[];
+  questions: TokenizedQuestion[];
+  delimiters: KevDelimiterIds;
+  maxStateTokens: number;
+  /** Limit for the state plus one question branch. */
+  maxLength: number;
+};
+
+export function encodeKevSequence(params: KevEncodeParams): EncodedSequence {
+  const { state, questions, delimiters, maxStateTokens, maxLength } = params;
+
+  const branches = questions.map((question) => {
+    const branch = [delimiters.question, ...question.instructions];
+    const ends: number[] = [];
+    for (const option of question.options) {
+      branch.push(delimiters.optionStart, ...option, delimiters.optionEnd);
+      ends.push(branch.length - 1);
+    }
+    branch.push(delimiters.decide);
+    return { branch, ends };
+  });
+
+  const longestBranch = Math.max(...branches.map((b) => b.branch.length));
+  // The <state> delimiter counts towards the branch budget.
+  const budget = maxLength - 1 - longestBranch;
+  if (budget < 0) {
+    throw new Error(
+      `A question needs ${longestBranch + 1} tokens which exceeds the ${maxLength} token context. Shorten the instructions or options.`,
+    );
+  }
+
+  const stateLimit = Math.min(maxStateTokens, budget);
+  const stateTokens = state.slice(0, stateLimit);
+
+  const inputIds: number[] = [delimiters.state, ...stateTokens];
+  const groups: number[][] = [];
+
+  for (const { branch, ends } of branches) {
+    const base = inputIds.length;
+    inputIds.push(...branch);
+    groups.push(ends.map((end) => base + end));
+  }
+
+  return {
+    inputIds,
+    extraInputs: {},
     groups,
     stateTokens: stateTokens.length,
     stateTruncated: stateTokens.length < state.length,

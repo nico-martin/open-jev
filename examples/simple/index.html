@@ -15,6 +15,16 @@
       </p>
 
       <section>
+        <label>
+          Model
+          <select id="model">
+            <option value="kev-0.6b">kev-0.6b (Qwen3, 0.34 GB q4f16)</option>
+            <option value="kev-4b">kev-4b (Qwen3, 2.3 GB q4f16)</option>
+            <option value="open-jev">
+              open-jev (DeBERTa-v3-large, 0.35 GB q4f16)
+            </option>
+          </select>
+        </label>
         <button id="info">Info</button>
         <button id="init">Load</button>
         <button id="decide" disabled>Decide</button>
@@ -26,8 +36,7 @@
       <section>
         <h2>State</h2>
         <textarea id="state" rows="4">
-I was charged twice for the same order and nobody answers my emails. I want my money back now.</textarea
-        >
+I was charged twice for the same order and nobody answers my emails. I want my money back now.</textarea>
       </section>
 
       <section>

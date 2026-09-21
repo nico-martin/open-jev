@@ -19,8 +19,13 @@ section {
   background: #fff;
 }
 
-button {
+button,
+select {
   margin: 4px;
+}
+
+label {
+  font-size: 0.9rem;
 }
 
 textarea,

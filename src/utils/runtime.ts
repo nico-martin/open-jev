@@ -45,12 +45,16 @@ export function isWebGpuFp16Supported(): Promise<boolean> {
  *
  * - device: `webgpu` when the runtime exposes WebGPU, `cpu` in Node.js,
  *   otherwise `wasm`.
- * - dtype: `fp16` on WebGPU with `shader-f16`, otherwise `q4`.
+ * - dtype: the family's preferred WebGPU variant when `shader-f16` is
+ *   available, otherwise `q4`.
  */
-export async function resolveRuntime(options: {
-  device?: OpenJevDevice | "auto";
-  dtype?: OpenJevDtype | "auto";
-}): Promise<OpenJevRuntime> {
+export async function resolveRuntime(
+  options: {
+    device?: OpenJevDevice | "auto";
+    dtype?: OpenJevDtype | "auto";
+  },
+  webgpuDtype: OpenJevDtype,
+): Promise<Pick<OpenJevRuntime, "device" | "dtype">> {
   const requestedDevice = options.device ?? "auto";
   const requestedDtype = options.dtype ?? "auto";
 
@@ -69,7 +73,7 @@ export async function resolveRuntime(options: {
   if (requestedDtype !== "auto") {
     dtype = requestedDtype;
   } else if (device === "webgpu" && (await isWebGpuFp16Supported())) {
-    dtype = "fp16";
+    dtype = webgpuDtype;
   } else {
     dtype = "q4";
   }

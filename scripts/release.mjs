@@ -7,7 +7,7 @@ const versionBump = process.argv[3] || "patch";
 const allowedVersionBumps = new Set(["patch", "minor", "major"]);
 
 if (!otp || !allowedVersionBumps.has(versionBump)) {
-  console.error("Usage: pnpm run publish <otp> [patch|minor|major]");
+  console.error("Usage: pnpm release <otp> [patch|minor|major]");
   process.exit(1);
 }
 
@@ -59,4 +59,11 @@ run("pnpm", ["build"]);
 
 console.log(`Publishing ${packageJson.name}@${packageJson.version}...`);
 
-run("npm", ["publish", "--registry", registry, "--otp", otp]);
+run("npm", [
+  "publish",
+  "--registry",
+  registry,
+  "--otp",
+  otp,
+  "--ignore-scripts",
+]);

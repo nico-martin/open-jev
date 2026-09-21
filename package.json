@@ -1,6 +1,6 @@
 {
   "name": "open-jev",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Typed decisions in the browser: run the open-jev model (a Jev-shaped System One model) with Transformers.js.",
   "author": "Nico Martin <mail@nico.dev>",
   "license": "MIT",
@@ -27,7 +27,7 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "format": "prettier --write \"src/**/*.ts\" \"scripts/*.mjs\" \"examples/*/src/**/*.ts\" README.md",
-    "publish": "node scripts/publish.mjs"
+    "release": "node scripts/release.mjs"
   },
   "keywords": [
     "jev",

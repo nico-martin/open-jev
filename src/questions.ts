@@ -5,19 +5,25 @@ import type {
   ScoreQuestion,
 } from "./types";
 
-export const MAX_CHOICE_OPTIONS = 255;
-export const MIN_SCORE_LEVELS = 2;
-export const MAX_SCORE_LEVELS = 10;
-
-/** Options the model was trained with for `noul` questions (index 1 = yes). */
+/** Options the models were trained with for `noul` questions (index 1 = yes). */
 export const NOUL_OPTIONS = ["no", "yes"] as const;
+
+export type QuestionLimits = {
+  minChoiceOptions: number;
+  maxChoiceOptions: number;
+  minScoreLevels: number;
+  maxScoreLevels: number;
+};
 
 /** Build a `choice` question: pick one of the given options. */
 export function choice<const O extends string>(
   instructions: string,
   options: readonly O[],
+  descriptions?: Partial<Record<O, string>>,
 ): ChoiceQuestion<O> {
-  return { type: "choice", instructions, options };
+  return descriptions
+    ? { type: "choice", instructions, options, descriptions }
+    : { type: "choice", instructions, options };
 }
 
 /** Build a `score` question: rate on an ordered scale (first = lowest). */
@@ -33,12 +39,33 @@ export function noul(statement: string): NoulQuestion {
   return { type: "noul", instructions: statement };
 }
 
-/** Options for a question as they are fed to the model. */
-export function questionOptions(question: Question): readonly string[] {
+/** Option labels of a question (keys of the answer distribution). */
+export function questionLabels(question: Question): readonly string[] {
   return question.type === "noul" ? NOUL_OPTIONS : question.options;
 }
 
-export function validateQuestion(question: Question, label: string): void {
+/** Option texts as they are fed to the model (`name: description` when given). */
+export function questionOptionTexts(question: Question): string[] {
+  if (question.type === "noul") {
+    return [...NOUL_OPTIONS];
+  }
+
+  if (question.type === "choice" && question.descriptions) {
+    const descriptions = question.descriptions as Record<string, string>;
+    return question.options.map((option) => {
+      const description = descriptions[option];
+      return description ? `${option}: ${description}` : option;
+    });
+  }
+
+  return [...question.options];
+}
+
+export function validateQuestion(
+  question: Question,
+  label: string,
+  limits: QuestionLimits,
+): void {
   if (!question || typeof question !== "object") {
     throw new Error(`Question ${label} must be an object.`);
   }
@@ -67,12 +94,17 @@ export function validateQuestion(question: Question, label: string): void {
     throw new Error(`Question ${label} needs an options array.`);
   }
 
-  const min = question.type === "choice" ? 2 : MIN_SCORE_LEVELS;
+  const min =
+    question.type === "choice"
+      ? limits.minChoiceOptions
+      : limits.minScoreLevels;
   const max =
-    question.type === "choice" ? MAX_CHOICE_OPTIONS : MAX_SCORE_LEVELS;
+    question.type === "choice"
+      ? limits.maxChoiceOptions
+      : limits.maxScoreLevels;
   if (options.length < min || options.length > max) {
     throw new Error(
-      `Question ${label} (${question.type}) needs between ${min} and ${max} options, got ${options.length}.`,
+      `Question ${label} (${question.type}) needs between ${min} and ${max} options for this model, got ${options.length}.`,
     );
   }
 

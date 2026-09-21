@@ -1,22 +1,24 @@
 import {
-  AutoModel,
+  AutoConfig,
   AutoTokenizer,
   ModelRegistry,
   Tensor,
 } from "@huggingface/transformers";
 import type { PreTrainedTokenizer } from "@huggingface/transformers";
 import { decodeAnswer } from "./answers";
+import type { TokenizedQuestion } from "./encoding";
 import {
-  encodeSequence,
-  type MarkerIds,
-  type TokenizedQuestion,
-} from "./encoding";
-import { questionOptions, validateQuestion } from "./questions";
+  detectFamily,
+  MODELS,
+  resolveModelId,
+  type FamilyAdapter,
+  type JevModel,
+} from "./models";
+import { questionOptionTexts, validateQuestion } from "./questions";
 import type {
   Answer,
   AnswersFor,
   DecideOptions,
-  LoadProgress,
   ModelProgressCallback,
   OpenJevInfo,
   OpenJevOptions,
@@ -28,6 +30,7 @@ import { normalizeError } from "./utils/errors";
 import { clamp } from "./utils/math";
 import { resolveRuntime } from "./utils/runtime";
 
+export { MODELS } from "./models";
 export { choice, noul, score } from "./questions";
 export type {
   Answer,
@@ -37,6 +40,9 @@ export type {
   ChoiceQuestion,
   DecideOptions,
   LoadProgress,
+  ModelAlias,
+  ModelFamily,
+  ModelId,
   NoulAnswer,
   NoulQuestion,
   OpenJevDevice,
@@ -50,42 +56,32 @@ export type {
   ScoreQuestion,
 } from "./types";
 
-const DEFAULT_MODEL_ID = "onnx-community/open-jev-deberta-v3-large-ONNX";
-const DEFAULT_TEMPERATURE = 1.05;
-const DEFAULT_MAX_STATE_TOKENS = 256;
-const DEFAULT_MAX_LENGTH = 512;
-
-type JevModel = {
-  (inputs: Record<string, Tensor>): Promise<{ logits: Tensor }>;
-  config?: { open_jev?: { temperature?: number } };
-  dispose?: () => Promise<unknown>;
-};
-
 type LoadedParts = {
   model: JevModel;
   tokenizer: PreTrainedTokenizer;
-  markers: MarkerIds;
+  family: FamilyAdapter;
   runtime: OpenJevRuntime;
   defaults: Required<DecideOptions>;
   maxLength: number;
 };
 
 /**
- * Typed decisions in the browser with the open-jev model.
+ * Typed decisions in the browser with Jev-shaped models.
  *
  * One `state` (any text) plus any number of typed questions go in, one
  * forward pass returns a calibrated probability distribution per question.
  * Nothing is generated, so answers are always one of the options you gave.
  *
- * Create an instance with `OpenJev.load()`.
+ * Create an instance with `OpenJev.load()`. Built-in models: `kev-0.6b`
+ * (default) and `kev-4b` (Qwen3), `open-jev` (DeBERTa-v3-large).
  */
 export class OpenJev {
-  /** The backend and weight variant that were loaded. */
+  /** The model, family, backend and weight variant that were loaded. */
   readonly runtime: OpenJevRuntime;
 
   private readonly model: JevModel;
   private readonly tokenizer: PreTrainedTokenizer;
-  private readonly markers: MarkerIds;
+  private readonly family: FamilyAdapter;
   private readonly defaults: Required<DecideOptions>;
   private readonly maxLength: number;
 
@@ -95,7 +91,7 @@ export class OpenJev {
   private constructor(parts: LoadedParts) {
     this.model = parts.model;
     this.tokenizer = parts.tokenizer;
-    this.markers = parts.markers;
+    this.family = parts.family;
     this.runtime = parts.runtime;
     this.defaults = parts.defaults;
     this.maxLength = parts.maxLength;
@@ -106,16 +102,18 @@ export class OpenJev {
    * instance.
    *
    * Supported options:
-   * - `model`: Hugging Face repo id (default `onnx-community/open-jev-deberta-v3-large-ONNX`).
+   * - `model`: `kev-0.6b` (default), `kev-4b`, `open-jev` or a Hugging Face repo id.
    * - `dtype`: `fp32 | fp16 | q4 | q4f16 | auto` (default `auto`).
    * - `device`: `webgpu | wasm | cpu | auto` (default `auto`).
    * - `onProgress`: download progress callback.
    * - `temperature`, `maxStateTokens`, `truncation`: defaults for `decide()`.
-   * - `maxLength`: total sequence limit (default `512`).
+   * - `maxLength`: context limit (model-specific default).
    */
   static async load(options: OpenJevOptions = {}): Promise<OpenJev> {
-    const modelId = options.model ?? DEFAULT_MODEL_ID;
-    const runtime = await resolveRuntime(options);
+    const modelId = resolveModelId(options.model);
+    const config = await AutoConfig.from_pretrained(modelId);
+    const family = detectFamily(config);
+    const runtime = await resolveRuntime(options, family.webgpuDtype);
     const onProgress = options.onProgress;
 
     let lastProgress = -1;
@@ -134,49 +132,30 @@ export class OpenJev {
     };
 
     const tokenizer = await AutoTokenizer.from_pretrained(modelId);
+    family.prepare(tokenizer);
 
-    const encodeMarker = (marker: string): number => {
-      const ids = encode(tokenizer, marker);
-      if (ids.length !== 1) {
-        throw new Error(
-          `Tokenizer of "${modelId}" does not know the marker token ${marker}.`,
-        );
-      }
-      return ids[0];
-    };
-
-    const markers: MarkerIds = {
-      cls: encodeMarker("[CLS]"),
-      sep: encodeMarker("[SEP]"),
-      state: encodeMarker("[STATE]"),
-      q: encodeMarker("[Q]"),
-      opt: encodeMarker("[OPT]"),
-    };
-
-    const model = (await AutoModel.from_pretrained(modelId, {
+    const model = await family.loadModel(modelId, {
+      config,
       dtype: runtime.dtype,
       device: runtime.device,
-      progress_callback: progressCallback,
-    })) as unknown as JevModel;
+      progress_callback: progressCallback as (info: unknown) => void,
+    });
 
     const defaults: Required<DecideOptions> = {
-      temperature:
-        options.temperature ??
-        model.config?.open_jev?.temperature ??
-        DEFAULT_TEMPERATURE,
-      maxStateTokens: options.maxStateTokens ?? DEFAULT_MAX_STATE_TOKENS,
+      temperature: options.temperature ?? family.defaults.temperature,
+      maxStateTokens: options.maxStateTokens ?? family.defaults.maxStateTokens,
       truncation: options.truncation ?? "cut",
     };
 
     return new OpenJev({
       model,
       tokenizer,
-      markers,
-      runtime,
+      family,
+      runtime: { model: modelId, family: family.name, ...runtime },
       defaults,
       maxLength: Math.max(
         8,
-        Math.floor(options.maxLength ?? DEFAULT_MAX_LENGTH),
+        Math.floor(options.maxLength ?? family.defaults.maxLength),
       ),
     });
   }
@@ -186,15 +165,18 @@ export class OpenJev {
    *
    * - `isCached`: whether every required file is present in the browser cache.
    * - `downloadSize`: total size in bytes of the files that will be fetched.
-   * - `files`: the file list, `device` and `dtype`: the resolved runtime.
+   * - `files`: the file list; `model`, `family`, `device`, `dtype`: the resolved runtime.
    */
   static async info(
     options: Pick<OpenJevOptions, "model" | "device" | "dtype"> = {},
   ): Promise<OpenJevInfo> {
-    const modelId = options.model ?? DEFAULT_MODEL_ID;
-    const runtime = await resolveRuntime(options);
+    const modelId = resolveModelId(options.model);
+    const config = await AutoConfig.from_pretrained(modelId);
+    const family = detectFamily(config);
+    const runtime = await resolveRuntime(options, family.webgpuDtype);
 
     const files = await ModelRegistry.get_files(modelId, {
+      config,
       dtype: runtime.dtype,
       device: runtime.device,
       include_tokenizer: true,
@@ -203,6 +185,7 @@ export class OpenJev {
 
     const [isCached, metadata] = await Promise.all([
       ModelRegistry.is_cached(modelId, {
+        config,
         dtype: runtime.dtype,
         device: runtime.device,
       }),
@@ -216,7 +199,14 @@ export class OpenJev {
       0,
     );
 
-    return { ...runtime, isCached, downloadSize, files };
+    return {
+      model: modelId,
+      family: family.name,
+      ...runtime,
+      isCached,
+      downloadSize,
+      files,
+    };
   }
 
   /**
@@ -249,7 +239,11 @@ export class OpenJev {
     }
 
     list.forEach((question, index) =>
-      validateQuestion(question, isList ? `#${index}` : `"${keys[index]}"`),
+      validateQuestion(
+        question,
+        isList ? `#${index}` : `"${keys[index]}"`,
+        this.family.limits,
+      ),
     );
 
     const settings: Required<DecideOptions> = {
@@ -283,7 +277,7 @@ export class OpenJev {
    */
   countTokens(text: string): number {
     this.assertNotDisposed();
-    return encode(this.tokenizer, text).length;
+    return this.encode(text).length;
   }
 
   /**
@@ -313,16 +307,15 @@ export class OpenJev {
   ): Promise<Answer[]> {
     try {
       const tokenized: TokenizedQuestion[] = questions.map((question) => ({
-        instructions: encode(this.tokenizer, question.instructions),
-        options: questionOptions(question).map((option) =>
-          encode(this.tokenizer, option),
+        instructions: this.encode(question.instructions),
+        options: questionOptionTexts(question).map((option) =>
+          this.encode(option),
         ),
       }));
 
-      const encoded = encodeSequence({
-        state: encode(this.tokenizer, state),
+      const encoded = this.family.encode({
+        state: this.encode(state),
         questions: tokenized,
-        markers: this.markers,
         maxStateTokens: settings.maxStateTokens,
         maxLength: this.maxLength,
       });
@@ -333,26 +326,35 @@ export class OpenJev {
         );
       }
 
-      const { logits } = await this.model({
+      const inputs: Record<string, Tensor> = {
         input_ids: int64(encoded.inputIds),
         attention_mask: int64(encoded.inputIds.map(() => 1)),
-        seg: int64(encoded.seg),
-        pair_q: int64(encoded.pairQ),
-        pair_opt: int64(encoded.pairOpt),
-      });
+      };
+      for (const [name, values] of Object.entries(encoded.extraInputs)) {
+        inputs[name] = int64(values);
+      }
 
+      const { logits } = await this.model(inputs);
       const scores = Array.from(logits.to("float32").data as ArrayLike<number>);
 
       return questions.map((question, index) =>
         decodeAnswer(
           question,
-          encoded.groups[index].map((pair) => scores[pair]),
+          encoded.groups[index].map((position) => scores[position]),
           settings.temperature,
         ),
       );
     } catch (error) {
       throw normalizeError(error);
     }
+  }
+
+  /** Tokenize caller text (escaped per family, no special tokens). */
+  private encode(text: string): number[] {
+    const { input_ids } = this.tokenizer(this.family.escape(text), {
+      add_special_tokens: false,
+    }) as { input_ids: Tensor };
+    return Array.from(input_ids.data as ArrayLike<bigint | number>, Number);
   }
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -366,13 +368,6 @@ export class OpenJev {
       throw new Error("OpenJev instance has been disposed.");
     }
   }
-}
-
-function encode(tokenizer: PreTrainedTokenizer, text: string): number[] {
-  const { input_ids } = tokenizer(text, { add_special_tokens: false }) as {
-    input_ids: Tensor;
-  };
-  return Array.from(input_ids.data as ArrayLike<bigint | number>, Number);
 }
 
 function int64(values: number[]): Tensor {

@@ -1,10 +1,11 @@
 import "./style.css";
 import { OpenJev, choice, noul, score } from "../../../src/index";
-import type { Answer } from "../../../src/index";
+import type { Answer, ModelAlias } from "../../../src/index";
 
 const infoButton = getEl<HTMLButtonElement>("info");
 const initButton = getEl<HTMLButtonElement>("init");
 const decideButton = getEl<HTMLButtonElement>("decide");
+const modelSelect = getEl<HTMLSelectElement>("model");
 const statusEl = getEl<HTMLParagraphElement>("status");
 const modelEl = getEl<HTMLParagraphElement>("model");
 const progressEl = getEl<HTMLProgressElement>("progress");
@@ -38,10 +39,24 @@ const questions = {
 const config = { dtype: "q4f16" } as const;
 let jev: OpenJev | null = null;
 
+const selectedModel = (): ModelAlias => modelSelect.value as ModelAlias;
+
+modelSelect.addEventListener("change", async () => {
+  if (jev) {
+    await jev.dispose();
+    jev = null;
+    decideButton.disabled = true;
+    initButton.disabled = false;
+    progressEl.value = 0;
+    setStatus("idle");
+    writeLog(`switched to ${selectedModel()}, previous model disposed`);
+  }
+});
+
 infoButton.addEventListener("click", async () => {
-  const info = await OpenJev.info(config);
+  const info = await OpenJev.info({ ...config, model: selectedModel() });
   const mb = (info.downloadSize / 1024 / 1024).toFixed(0);
-  modelEl.textContent = `Model: ${info.device}/${info.dtype}, cached=${info.isCached}, download=${mb} MB`;
+  modelEl.textContent = `Model: ${info.model} (${info.family}), ${info.device}/${info.dtype}, cached=${info.isCached}, download=${mb} MB`;
   writeLog(`info: ${info.files.join(", ")}`);
 });
 
@@ -58,6 +73,7 @@ initButton.addEventListener("click", async () => {
   try {
     jev = await OpenJev.load({
       ...config,
+      model: selectedModel(),
       onProgress: ({ progress, loaded, total }) => {
         progressEl.value = progress;
         const mb = (n: number) => (n / 1024 / 1024).toFixed(0);
@@ -65,7 +81,9 @@ initButton.addEventListener("click", async () => {
       },
     });
     progressEl.value = 1;
-    setStatus(`ready (${jev.runtime.device}/${jev.runtime.dtype})`);
+    setStatus(
+      `ready (${jev.runtime.model}, ${jev.runtime.device}/${jev.runtime.dtype})`,
+    );
     writeLog("load: ready");
     decideButton.disabled = false;
   } catch (error) {
@@ -84,8 +102,11 @@ decideButton.addEventListener("click", async () => {
   const started = performance.now();
   try {
     const answers = await jev.decide(stateEl.value, questions);
+    console.log(answers);
     const took = Math.round(performance.now() - started);
-    setStatus(`ready (${jev.runtime.device}/${jev.runtime.dtype})`);
+    setStatus(
+      `ready (${jev.runtime.model}, ${jev.runtime.device}/${jev.runtime.dtype})`,
+    );
     writeLog(
       `decide (${took} ms, ${jev.countTokens(stateEl.value)} state tokens): area=${answers.area.choice}, sentiment=${answers.sentiment.level}, refund=${answers.refund.answer}`,
     );

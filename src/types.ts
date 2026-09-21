@@ -1,7 +1,18 @@
 import type { ProgressInfo } from "@huggingface/transformers";
 
-/** ONNX weight variants published for the open-jev model. */
+/**
+ * ONNX weight variants. `open-jev` ships `fp32`, `fp16`, `q4` and `q4f16`;
+ * the `kev` models ship `q4` and `q4f16`.
+ */
 export type OpenJevDtype = "fp32" | "fp16" | "q4" | "q4f16";
+
+/** Built-in model aliases. Any Hugging Face repo id with a compatible config works too. */
+export type ModelAlias = "open-jev" | "kev-0.6b" | "kev-4b";
+
+export type ModelId = ModelAlias | (string & {});
+
+/** Encoding family, detected from the repo's `config.json`. */
+export type ModelFamily = "open-jev" | "kev";
 
 /** Execution backends: `webgpu`/`wasm` in the browser, `cpu` in Node.js. */
 export type OpenJevDevice = "webgpu" | "wasm" | "cpu";
@@ -14,7 +25,8 @@ export type DecideOptions = {
    */
   temperature?: number;
   /**
-   * Maximum number of state tokens kept before the questions (default `256`).
+   * Maximum number of state tokens kept before the questions
+   * (default `256` for open-jev, `8192` for kev).
    */
   maxStateTokens?: number;
   /**
@@ -26,13 +38,14 @@ export type DecideOptions = {
 
 export type OpenJevOptions = DecideOptions & {
   /**
-   * Hugging Face model id (or a local/self-hosted path understood by
-   * Transformers.js). Defaults to `onnx-community/open-jev-deberta-v3-large-ONNX`.
+   * Model alias (`"open-jev"`, `"kev-0.6b"`, `"kev-4b"`) or any Hugging Face
+   * repo id / local path understood by Transformers.js. Defaults to `"kev-0.6b"`.
    */
-  model?: string;
+  model?: ModelId;
   /**
-   * Weight variant. `"auto"` (default) picks `fp16` on WebGPU with
-   * `shader-f16` support and `q4` everywhere else.
+   * Weight variant. `"auto"` (default) picks the model's best WebGPU variant
+   * (`fp16` for open-jev, `q4f16` for kev) when `shader-f16` is supported and
+   * `q4` everywhere else.
    */
   dtype?: OpenJevDtype | "auto";
   /**
@@ -40,13 +53,20 @@ export type OpenJevOptions = DecideOptions & {
    * Node.js, else `wasm`.
    */
   device?: OpenJevDevice | "auto";
-  /** Total sequence length limit (default `512`). */
+  /**
+   * Context limit in tokens. For open-jev this is the whole sequence
+   * (default `512`); for kev it is the state plus one question branch
+   * (default `8192`).
+   */
   maxLength?: number;
   /** Called with download progress while files are fetched. */
   onProgress?: (progress: LoadProgress) => void;
 };
 
 export type OpenJevRuntime = {
+  /** Resolved Hugging Face repo id. */
+  model: string;
+  family: ModelFamily;
   device: OpenJevDevice;
   dtype: OpenJevDtype;
 };
@@ -74,9 +94,11 @@ export type ChoiceQuestion<O extends string = string> = {
   type: "choice";
   instructions: string;
   options: readonly O[];
+  /** Optional description per option, rendered as `option: description`. */
+  descriptions?: Partial<Record<O, string>>;
 };
 
-/** Rate on an ordered scale of 2 to 10 levels (first = lowest). */
+/** Rate on an ordered scale of levels (first = lowest). */
 export type ScoreQuestion<L extends string = string> = {
   type: "score";
   instructions: string;
