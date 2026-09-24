@@ -164,3 +164,77 @@ export function encodeKevSequence(params: KevEncodeParams): EncodedSequence {
     stateTruncated: stateTokens.length < state.length,
   };
 }
+
+/**
+ * gliner2 (GLiNER2.5-Decide, DeBERTa-v3-large):
+ *   ( [P] prompt ( [L] option_1 [L] option_2 … ) ) [SEP_STRUCT] ( [P] … ) [SEP_TEXT] word word …
+ *   plus `marker_positions`, the index of every [L] token; the graph returns
+ *   one logit per marker. `prompt` is the instructions with option descriptions
+ *   appended as ` [DESCRIPTION] option: description`; the state is lowercased
+ *   and tokenized word by word (see `gliner2Family`).
+ */
+
+export type Gliner2MarkerIds = {
+  p: number;
+  l: number;
+  sepStruct: number;
+  sepText: number;
+  /** Token ids of "(" and ")" as standalone words. */
+  open: number[];
+  close: number[];
+};
+
+export type Gliner2EncodeParams = {
+  state: number[];
+  questions: TokenizedQuestion[];
+  markers: Gliner2MarkerIds;
+  maxStateTokens: number;
+  maxLength: number;
+};
+
+export function encodeGliner2Sequence(
+  params: Gliner2EncodeParams,
+): EncodedSequence {
+  const { state, questions, markers, maxStateTokens, maxLength } = params;
+
+  const inputIds: number[] = [];
+  const markerPositions: number[] = [];
+  const groups: number[][] = [];
+
+  questions.forEach((question, questionIndex) => {
+    if (questionIndex > 0) {
+      inputIds.push(markers.sepStruct);
+    }
+    inputIds.push(...markers.open, markers.p, ...question.instructions);
+    inputIds.push(...markers.open);
+    const group: number[] = [];
+    for (const option of question.options) {
+      group.push(markerPositions.length);
+      markerPositions.push(inputIds.length);
+      inputIds.push(markers.l, ...option);
+    }
+    groups.push(group);
+    inputIds.push(...markers.close, ...markers.close);
+  });
+
+  inputIds.push(markers.sepText);
+
+  const budget = maxLength - inputIds.length;
+  if (budget < 0) {
+    throw new Error(
+      `Questions need ${inputIds.length} tokens which exceeds the ${maxLength} token context. Shorten the instructions or options, or ask fewer questions per call.`,
+    );
+  }
+
+  const stateLimit = Math.min(maxStateTokens, budget);
+  const stateTokens = state.slice(0, stateLimit);
+  inputIds.push(...stateTokens);
+
+  return {
+    inputIds,
+    extraInputs: { marker_positions: markerPositions },
+    groups,
+    stateTokens: stateTokens.length,
+    stateTruncated: stateTokens.length < state.length,
+  };
+}
