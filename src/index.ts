@@ -73,7 +73,8 @@ type LoadedParts = {
  * Nothing is generated, so answers are always one of the options you gave.
  *
  * Create an instance with `OpenJev.load()`. Built-in models: `kev-0.6b`
- * (default) and `kev-4b` (Qwen3), `open-jev` (DeBERTa-v3-large).
+ * (default) and `kev-4b` (Qwen3), `open-jev` (DeBERTa-v3-large) and
+ * `gliner2-decide` (GLiNER2.5-Decide, DeBERTa-v3-large).
  */
 export class OpenJev {
   /** The model, family, backend and weight variant that were loaded. */
@@ -102,7 +103,7 @@ export class OpenJev {
    * instance.
    *
    * Supported options:
-   * - `model`: `kev-0.6b` (default), `kev-4b`, `open-jev` or a Hugging Face repo id.
+   * - `model`: `kev-0.6b` (default), `kev-4b`, `open-jev`, `gliner2-decide` or a Hugging Face repo id.
    * - `dtype`: `fp32 | fp16 | q4 | q4f16 | auto` (default `auto`).
    * - `device`: `webgpu | wasm | cpu | auto` (default `auto`).
    * - `onProgress`: download progress callback.
@@ -277,6 +278,13 @@ export class OpenJev {
    */
   countTokens(text: string): number {
     this.assertNotDisposed();
+    if (this.family.tokenize) {
+      return this.family.tokenize({
+        state: text,
+        questions: [],
+        encode: (value) => this.encode(value),
+      }).state.length;
+    }
     return this.encode(text).length;
   }
 
@@ -306,15 +314,19 @@ export class OpenJev {
     settings: Required<DecideOptions>,
   ): Promise<Answer[]> {
     try {
-      const tokenized: TokenizedQuestion[] = questions.map((question) => ({
-        instructions: this.encode(question.instructions),
-        options: questionOptionTexts(question).map((option) =>
-          this.encode(option),
-        ),
-      }));
+      const encode = (text: string): number[] => this.encode(text);
+      const { state: stateIds, questions: tokenized } = this.family.tokenize
+        ? this.family.tokenize({ state, questions, encode })
+        : {
+            state: encode(state),
+            questions: questions.map((question): TokenizedQuestion => ({
+              instructions: encode(question.instructions),
+              options: questionOptionTexts(question).map(encode),
+            })),
+          };
 
       const encoded = this.family.encode({
-        state: this.encode(state),
+        state: stateIds,
         questions: tokenized,
         maxStateTokens: settings.maxStateTokens,
         maxLength: this.maxLength,
