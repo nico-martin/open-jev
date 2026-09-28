@@ -46,14 +46,18 @@ export function isWebGpuFp16Supported(): Promise<boolean> {
  * - device: `webgpu` when the runtime exposes WebGPU, `cpu` in Node.js,
  *   otherwise `wasm`.
  * - dtype: the family's preferred WebGPU variant when `shader-f16` is
- *   available, otherwise `q4`.
+ *   available, otherwise its fallback (`q4` unless the family says otherwise).
  */
 export async function resolveRuntime(
   options: {
     device?: OpenJevDevice | "auto";
     dtype?: OpenJevDtype | "auto";
   },
-  webgpuDtype: OpenJevDtype,
+  family: {
+    webgpuDtype: OpenJevDtype;
+    fallbackDtype?: OpenJevDtype;
+    dtypes?: readonly OpenJevDtype[];
+  },
 ): Promise<Pick<OpenJevRuntime, "device" | "dtype">> {
   const requestedDevice = options.device ?? "auto";
   const requestedDtype = options.dtype ?? "auto";
@@ -73,9 +77,15 @@ export async function resolveRuntime(
   if (requestedDtype !== "auto") {
     dtype = requestedDtype;
   } else if (device === "webgpu" && (await isWebGpuFp16Supported())) {
-    dtype = webgpuDtype;
+    dtype = family.webgpuDtype;
   } else {
-    dtype = "q4";
+    dtype = family.fallbackDtype ?? "q4";
+  }
+
+  if (family.dtypes && !family.dtypes.includes(dtype)) {
+    throw new Error(
+      `This model ships ${family.dtypes.join(", ")} weights only; dtype "${dtype}" is not available.`,
+    );
   }
 
   return { device, dtype };

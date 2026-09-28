@@ -8,8 +8,8 @@ import type { PreTrainedTokenizer } from "@huggingface/transformers";
 import { decodeAnswer } from "./answers";
 import type { TokenizedQuestion } from "./encoding";
 import {
-  detectFamily,
   MODELS,
+  resolveModel,
   resolveModelId,
   type FamilyAdapter,
   type JevModel,
@@ -44,6 +44,7 @@ export type {
   ModelFamily,
   ModelId,
   NoulAnswer,
+  NoulDescriptions,
   NoulQuestion,
   OpenJevDevice,
   OpenJevDtype,
@@ -73,7 +74,8 @@ type LoadedParts = {
  * Nothing is generated, so answers are always one of the options you gave.
  *
  * Create an instance with `OpenJev.load()`. Built-in models: `kev-0.6b`
- * (default) and `kev-4b` (Qwen3), `open-jev` (DeBERTa-v3-large).
+ * (default) and `kev-4b` (Qwen3), `open-jev` (DeBERTa-v3-large) and
+ * `julia-1` (Julia 1, mmBERT-small).
  */
 export class OpenJev {
   /** The model, family, backend and weight variant that were loaded. */
@@ -102,7 +104,7 @@ export class OpenJev {
    * instance.
    *
    * Supported options:
-   * - `model`: `kev-0.6b` (default), `kev-4b`, `open-jev` or a Hugging Face repo id.
+   * - `model`: `kev-0.6b` (default), `kev-4b`, `open-jev`, `julia-1` or a Hugging Face repo id.
    * - `dtype`: `fp32 | fp16 | q4 | q4f16 | auto` (default `auto`).
    * - `device`: `webgpu | wasm | cpu | auto` (default `auto`).
    * - `onProgress`: download progress callback.
@@ -111,9 +113,10 @@ export class OpenJev {
    */
   static async load(options: OpenJevOptions = {}): Promise<OpenJev> {
     const modelId = resolveModelId(options.model);
-    const config = await AutoConfig.from_pretrained(modelId);
-    const family = detectFamily(config);
-    const runtime = await resolveRuntime(options, family.webgpuDtype);
+    const { config, family } = await resolveModel(modelId, (id) =>
+      AutoConfig.from_pretrained(id),
+    );
+    const runtime = await resolveRuntime(options, family);
     const onProgress = options.onProgress;
 
     let lastProgress = -1;
@@ -171,28 +174,33 @@ export class OpenJev {
     options: Pick<OpenJevOptions, "model" | "device" | "dtype"> = {},
   ): Promise<OpenJevInfo> {
     const modelId = resolveModelId(options.model);
-    const config = await AutoConfig.from_pretrained(modelId);
-    const family = detectFamily(config);
-    const runtime = await resolveRuntime(options, family.webgpuDtype);
+    const { config, family } = await resolveModel(modelId, (id) =>
+      AutoConfig.from_pretrained(id),
+    );
+    const runtime = await resolveRuntime(options, family);
 
-    const files = await ModelRegistry.get_files(modelId, {
-      config,
-      dtype: runtime.dtype,
-      device: runtime.device,
-      include_tokenizer: true,
-      include_processor: false,
-    });
+    const files = family.files
+      ? family.files(runtime.dtype)
+      : await ModelRegistry.get_files(modelId, {
+          config,
+          dtype: runtime.dtype,
+          device: runtime.device,
+          include_tokenizer: true,
+          include_processor: false,
+        });
 
-    const [isCached, metadata] = await Promise.all([
-      ModelRegistry.is_cached(modelId, {
-        config,
-        dtype: runtime.dtype,
-        device: runtime.device,
-      }),
-      Promise.all(
-        files.map((file) => ModelRegistry.get_file_metadata(modelId, file)),
-      ),
-    ]);
+    const metadata = await Promise.all(
+      files.map((file) => ModelRegistry.get_file_metadata(modelId, file)),
+    );
+    // Repos outside the Transformers.js layout have no config.json for
+    // is_cached(); every file's metadata says whether it came from the cache.
+    const isCached = family.files
+      ? metadata.every((meta) => meta.fromCache === true)
+      : await ModelRegistry.is_cached(modelId, {
+          config,
+          dtype: runtime.dtype,
+          device: runtime.device,
+        });
 
     const downloadSize = metadata.reduce(
       (sum, meta) => sum + (meta.size ?? 0),
@@ -277,7 +285,9 @@ export class OpenJev {
    */
   countTokens(text: string): number {
     this.assertNotDisposed();
-    return this.encode(text).length;
+    return this.family.countTokens
+      ? this.family.countTokens(text)
+      : this.encode(text).length;
   }
 
   /**
@@ -306,6 +316,24 @@ export class OpenJev {
     settings: Required<DecideOptions>,
   ): Promise<Answer[]> {
     try {
+      if (this.family.decide) {
+        const result = await this.family.decide({
+          model: this.model,
+          state,
+          questions,
+          maxStateTokens: settings.maxStateTokens,
+          maxLength: this.maxLength,
+        });
+        if (result.stateTruncated && settings.truncation === "error") {
+          throw new Error(
+            `State was cut to ${result.stateTokens} tokens (limit ${settings.maxStateTokens}, ${this.maxLength} in total). Shorten the state or the questions, or set truncation to "cut".`,
+          );
+        }
+        return questions.map((question, index) =>
+          decodeAnswer(question, result.logits[index], settings.temperature),
+        );
+      }
+
       const tokenized: TokenizedQuestion[] = questions.map((question) => ({
         instructions: this.encode(question.instructions),
         options: questionOptionTexts(question).map((option) =>

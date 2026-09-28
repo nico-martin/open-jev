@@ -10,14 +10,16 @@ import {
   type EncodedSequence,
   type TokenizedQuestion,
 } from "./encoding";
+import { JULIA_REPOS, juliaConfig, juliaFamily } from "./julia";
 import type { QuestionLimits } from "./questions";
-import type { ModelAlias, ModelFamily, OpenJevDtype } from "./types";
+import type { ModelAlias, ModelFamily, OpenJevDtype, Question } from "./types";
 
 /** Hugging Face repos behind the built-in aliases. */
 export const MODELS: Record<ModelAlias, string> = {
   "open-jev": "onnx-community/open-jev-deberta-v3-large-ONNX",
   "kev-0.6b": "onnx-community/kev-0.6b-ONNX",
   "kev-4b": "onnx-community/kev-4b-ONNX",
+  "julia-1": "SupersonicLabs/Julia-1-ONNX",
 };
 
 export const DEFAULT_MODEL: ModelAlias = "kev-0.6b";
@@ -63,7 +65,45 @@ export type FamilyAdapter = {
     maxStateTokens: number;
     maxLength: number;
   }): EncodedSequence;
+  /** Variant used off WebGPU or without `shader-f16` (default `q4`). */
+  fallbackDtype?: OpenJevDtype;
+  /** Variants the repo ships, when not all of them. */
+  dtypes?: readonly OpenJevDtype[];
+  /** Files to fetch, for repos that do not use the Transformers.js layout. */
+  files?(dtype: OpenJevDtype): string[];
+  /** Tokens `text` occupies, for families that tokenize on their own. */
+  countTokens?(text: string): number;
+  /**
+   * Families whose model scores each question on its own run the whole pass
+   * here and return one list of logits per question.
+   */
+  decide?(params: {
+    model: JevModel;
+    state: string;
+    questions: Question[];
+    maxStateTokens: number;
+    maxLength: number;
+  }): Promise<{
+    logits: number[][];
+    stateTokens: number;
+    stateTruncated: boolean;
+  }>;
 };
+
+/**
+ * Config and family for a model id. Most repos carry a family section in
+ * `config.json`; Julia 1 ships without one and is recognized by repo id.
+ */
+export async function resolveModel(
+  modelId: string,
+  loadConfig: (id: string) => Promise<PretrainedConfig>,
+): Promise<{ config: PretrainedConfig; family: FamilyAdapter }> {
+  if (JULIA_REPOS.includes(modelId)) {
+    return { config: juliaConfig(), family: juliaFamily() };
+  }
+  const config = await loadConfig(modelId);
+  return { config, family: detectFamily(config) };
+}
 
 type ConfigJson = Record<string, unknown>;
 

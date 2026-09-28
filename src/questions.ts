@@ -1,5 +1,6 @@
 import type {
   ChoiceQuestion,
+  NoulDescriptions,
   NoulQuestion,
   Question,
   ScoreQuestion,
@@ -34,9 +35,17 @@ export function score<const L extends string>(
   return { type: "score", instructions, options: levels };
 }
 
-/** Build a `noul` question: does the statement hold for the state? */
-export function noul(statement: string): NoulQuestion {
-  return { type: "noul", instructions: statement };
+/**
+ * Build a `noul` question: does the statement hold for the state?
+ * `descriptions` optionally say what each outcome means (used by julia-1).
+ */
+export function noul(
+  statement: string,
+  descriptions?: NoulDescriptions,
+): NoulQuestion {
+  return descriptions
+    ? { type: "noul", instructions: statement, descriptions }
+    : { type: "noul", instructions: statement };
 }
 
 /** Option labels of a question (keys of the answer distribution). */
@@ -78,6 +87,28 @@ export function validateQuestion(
   }
 
   if (question.type === "noul") {
+    const descriptions = question.descriptions;
+    if (descriptions === undefined) {
+      return;
+    }
+    if (!descriptions || typeof descriptions !== "object") {
+      throw new Error(
+        `Question ${label} (noul) descriptions must be an object.`,
+      );
+    }
+    for (const key of Object.keys(descriptions)) {
+      const value = (descriptions as Record<string, unknown>)[key];
+      if (key !== "false" && key !== "true") {
+        throw new Error(
+          `Question ${label} (noul) descriptions take only "false" and "true", got "${key}".`,
+        );
+      }
+      if (typeof value !== "string" || value.trim() === "") {
+        throw new Error(
+          `Question ${label} (noul) has an empty "${key}" description.`,
+        );
+      }
+    }
     return;
   }
 
