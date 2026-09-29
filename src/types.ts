@@ -7,12 +7,12 @@ import type { ProgressInfo } from "@huggingface/transformers";
 export type OpenJevDtype = "fp32" | "fp16" | "q4" | "q4f16";
 
 /** Built-in model aliases. Any Hugging Face repo id with a compatible config works too. */
-export type ModelAlias = "open-jev" | "kev-0.6b" | "kev-4b";
+export type ModelAlias = "open-jev" | "kev-0.6b" | "kev-4b" | "gliner2-decide";
 
 export type ModelId = ModelAlias | (string & {});
 
 /** Encoding family, detected from the repo's `config.json`. */
-export type ModelFamily = "open-jev" | "kev";
+export type ModelFamily = "open-jev" | "kev" | "gliner2";
 
 /** Execution backends: `webgpu`/`wasm` in the browser, `cpu` in Node.js. */
 export type OpenJevDevice = "webgpu" | "wasm" | "cpu";
@@ -38,13 +38,13 @@ export type DecideOptions = {
 
 export type OpenJevOptions = DecideOptions & {
   /**
-   * Model alias (`"open-jev"`, `"kev-0.6b"`, `"kev-4b"`) or any Hugging Face
+   * Model alias (`"open-jev"`, `"kev-0.6b"`, `"kev-4b"`, `"gliner2-decide"`) or any Hugging Face
    * repo id / local path understood by Transformers.js. Defaults to `"kev-0.6b"`.
    */
   model?: ModelId;
   /**
    * Weight variant. `"auto"` (default) picks the model's best WebGPU variant
-   * (`fp16` for open-jev, `q4f16` for kev) when `shader-f16` is supported and
+   * (`fp16` for open-jev and gliner2-decide, `q4f16` for kev) when `shader-f16` is supported and
    * `q4` everywhere else.
    */
   dtype?: OpenJevDtype | "auto";
